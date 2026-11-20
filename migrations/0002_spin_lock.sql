@@ -1,0 +1,2 @@
+ALTER TABLE sessions
+ADD COLUMN spin_lock INTEGER NOT NULL DEFAULT 0 CHECK (spin_lock IN (0, 1));

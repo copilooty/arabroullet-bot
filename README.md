@@ -5,9 +5,9 @@ Chat-only Telegram roulette bot with virtual coins. The Cloudflare version uses 
 ## Rules
 
 - Every new Telegram user receives 10,000 virtual coins.
-- The server draws one result uniformly from the 37 pockets on a European single-zero wheel (0–36).
-- Pocket colors follow the European roulette layout; 0 is green.
-- A winning straight-up number bet returns 36× the stake, including the stake. Red/black returns 2×. A color bet loses on 0.
+- The server draws one result uniformly from 0–12.
+- Numbers use the existing red/black layout; 0 is green.
+- Exact numbers 1–12 and red/black pay 2× the stake, while exact 0 pays 36×. A winning payout includes the stake.
 - A winning payout includes the stake. Losing stakes are deducted.
 - No deposits, purchases, cash-outs, or real-money payments are implemented.
 
@@ -30,7 +30,7 @@ Requires Node.js and an account at Cloudflare. In a terminal opened in this proj
    ```
 
 3. If you created a separate database, replace `database_id` in `wrangler.jsonc` with its ID.
-4. Apply the database migrations (the existing production database already has them):
+4. Apply all database migrations, including the spin-lock field used during the animation:
 
    ```sh
    npx wrangler d1 migrations apply arabian-roulette-bot --remote
@@ -58,7 +58,7 @@ Requires Node.js and an account at Cloudflare. In a terminal opened in this proj
    .\deploy\register-webhook.ps1
    ```
 
-The helper hides the token and secret while you type them. After deployment, `/start` opens the chat game; admins can use `/admin`.
+The helper hides the token and secret while you type them. After deployment, `/start` opens the chat game; admins can use `/admin`. Each spin plays Telegram's built-in 🎰 animation before showing whether the bet won.
 
 ## Local long-polling run
 

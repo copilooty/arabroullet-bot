@@ -16,10 +16,10 @@ export function parseTextBet(text) {
   if (/^черн[а-я]*$/u.test(selection) || selection === "black") {
     return validateBet({ type: "color", value: "black", amount });
   }
-  if (/^(?:[0-9]|[1-2][0-9]|3[0-6])$/u.test(selection)) {
+  if (/^(?:[0-9]|1[0-2])$/u.test(selection)) {
     return validateBet({ type: "number", value: Number(selection), amount });
   }
-  throw new TypeError("Ставь на красное, чёрное или число от 0 до 36.");
+  throw new TypeError("Ставь на красное, чёрное или число от 0 до 12.");
 }
 
 export function startTelegramBot({ token, adminIds = [], wallets }) {
@@ -47,7 +47,7 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
   function getState(userId) {
     const key = String(userId);
     if (!gameStates.has(key)) {
-      gameStates.set(key, { bets: [], lastBets: [], lastRound: null, chatId: null, messageId: null });
+      gameStates.set(key, { bets: [], lastBets: [], lastRound: null, chatId: null, messageId: null, spinning: false });
     }
     return gameStates.get(key);
   }
@@ -66,19 +66,15 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
   }
 
   function formatGame(state, balance, playerName) {
-    const numberLines = [];
-    for (let first = 0; first <= 36; first += 13) {
-      const last = Math.min(first + 12, 36);
-      const entries = [];
-      for (let number = first; number <= last; number += 1) {
-        const color = colorFor(number) === "red" ? "🔴" : colorFor(number) === "black" ? "⚫" : "💚";
-        entries.push(`${number}${color}`);
-      }
-      numberLines.push(entries.join("  "));
-    }
+    const numberLines = [[0, 1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]].map((numbers) =>
+      numbers.map((number) => {
+        const color = colorFor(number);
+        return `${number}${color === "red" ? "🔴" : color === "black" ? "⚫" : "💚"}`;
+      }).join("  ")
+    );
     const lines = [
       "🎰 Минирулетка",
-      "Европейская рулетка · числа 0–36",
+      "Числа от 0 до 12",
       ...numberLines,
       "",
       "Ставки можно написать текстом:",
@@ -96,15 +92,15 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
         "",
         `Последний результат: ${result} ${colorName(color)}.`,
         won
-          ? `Выплата: ${payout.toLocaleString("ru-RU")} монет (ставки: ${totalStake.toLocaleString("ru-RU")}).`
-          : `Ставка ${totalStake.toLocaleString("ru-RU")} монет не сыграла.`,
+          ? `✅ Успешно! Выплата: ${payout.toLocaleString("ru-RU")} монет (ставки: ${totalStake.toLocaleString("ru-RU")}).`
+          : `❌ Не сыграла ставка ${totalStake.toLocaleString("ru-RU")} монет.`,
         `Баланс ${playerName}: ${updatedBalance.toLocaleString("ru-RU")} монет.`
       );
     } else {
       lines.push("", `Баланс ${playerName}: ${balance.toLocaleString("ru-RU")} монет.`);
     }
 
-    lines.push("", "Выплаты: точное число ×36, красное/чёрное ×2. Ноль зелёный; цвет на ноль не выигрывает.");
+    lines.push("", "Выплаты: числа 1–12 ×2, ноль ×36, красное/чёрное ×2.");
     return lines.join("\n");
   }
 
@@ -319,9 +315,9 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     if (command === "/help" || text.toLowerCase() === "📖 помощь") {
       await sendMessage(
         chatId,
-        "Добавляй ставки кнопками или текстом: 1000 на красное или 5000 на 12. Также доступны чёрное и числа 0–36.\n" +
+        "Добавляй ставки кнопками или текстом: 1000 на красное или 5000 на 12. Также доступны чёрное и числа 0–12.\n" +
         "Нажми «Крутить», чтобы запустить раунд. «Повторить» ставит прошлый набор, «Удвоить» удваивает текущий.\n" +
-        "Выплаты: красное/чёрное ×2, точное число ×36 (включая 0). Выплата включает ставку.\n" +
+        "Выплаты: красное/чёрное и числа 1–12 ×2, точное число 0 ×36. Выплата включает ставку.\n" +
         "Монеты виртуальные: их нельзя купить или вывести."
       );
       return;
@@ -381,8 +377,13 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     }
 
     const state = getState(userId);
+    if (state.spinning) {
+      await answerCallback(query, "Крутка уже идёт. Подожди результат.");
+      return;
+    }
     const parts = query.data.split(":");
     let responseText = "";
+    let shouldSpin = false;
     try {
       if (parts[0] === "bet" && parts[1] === "color" && parts.length === 3) {
         addBet(userId, { type: "color", value: parts[2], amount: QUICK_STAKE });
@@ -407,10 +408,7 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
         state.bets = [];
       } else if (query.data === "spin") {
         if (!state.bets.length) throw new TypeError("Сначала добавь ставку.");
-        const round = wallets.playBets(userId, state.bets);
-        state.lastBets = state.bets.map((bet) => ({ ...bet }));
-        state.bets = [];
-        state.lastRound = round;
+        shouldSpin = true;
       } else {
         throw new TypeError("Эта кнопка больше неактуальна. Открой игру заново.");
       }
@@ -419,7 +417,21 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     }
 
     await answerCallback(query, responseText);
-    if (!responseText) await refreshGame(chatId, userId, displayName(query.from));
+    if (responseText) return;
+    if (shouldSpin) {
+      state.spinning = true;
+      try {
+        await callTelegram("sendDice", { chat_id: chatId, emoji: "🎰" });
+        await delay(2_200);
+        const round = wallets.playBets(userId, state.bets);
+        state.lastBets = state.bets.map((bet) => ({ ...bet }));
+        state.bets = [];
+        state.lastRound = round;
+      } finally {
+        state.spinning = false;
+      }
+    }
+    await refreshGame(chatId, userId, displayName(query.from));
   }
 
   async function handleUpdate(update) {

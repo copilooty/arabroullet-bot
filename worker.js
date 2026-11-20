@@ -3,6 +3,7 @@ import { parseTextBet } from "./telegram-bot.js";
 
 const STARTING_BALANCE = 10_000;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 function isValidTelegramId(value) {
   return /^\d{1,20}$/.test(String(value));
@@ -19,12 +20,12 @@ function isValidWebhookSecret(request, expectedSecret) {
 }
 
 function randomNumber() {
-  const limit = 0x1_0000_0000 - (0x1_0000_0000 % 37);
+  const limit = 0x1_0000_0000 - (0x1_0000_0000 % 13);
   const buffer = new Uint32Array(1);
   do {
     crypto.getRandomValues(buffer);
   } while (buffer[0] >= limit);
-  return buffer[0] % 37;
+  return buffer[0] % 13;
 }
 
 function adminIds(env) {
@@ -32,7 +33,7 @@ function adminIds(env) {
 }
 
 function defaultSession() {
-  return { bets: [], lastBets: [], lastRound: null, chatId: null, messageId: null, adminAction: null };
+  return { bets: [], lastBets: [], lastRound: null, chatId: null, messageId: null, adminAction: null, spinning: false };
 }
 
 function displayName(user) {
@@ -42,17 +43,36 @@ function displayName(user) {
 
 async function loadSession(db, userId) {
   const row = await db.prepare(
-    "SELECT bets_json, last_bets_json, last_round_json, chat_id, message_id, admin_action FROM sessions WHERE user_id = ?"
+    "SELECT bets_json, last_bets_json, last_round_json, chat_id, message_id, admin_action, spin_lock FROM sessions WHERE user_id = ?"
   ).bind(String(userId)).first();
   if (!row) return defaultSession();
+  const bets = JSON.parse(row.bets_json).filter((bet) =>
+    bet.type === "color" || (bet.type === "number" && Number.isInteger(bet.value) && bet.value >= 0 && bet.value <= 12)
+  );
+  const lastBets = JSON.parse(row.last_bets_json).filter((bet) =>
+    bet.type === "color" || (bet.type === "number" && Number.isInteger(bet.value) && bet.value >= 0 && bet.value <= 12)
+  );
+  const lastRound = row.last_round_json === null ? null : JSON.parse(row.last_round_json);
   return {
-    bets: JSON.parse(row.bets_json).filter((bet) => bet.type !== "range"),
-    lastBets: JSON.parse(row.last_bets_json).filter((bet) => bet.type !== "range"),
-    lastRound: row.last_round_json === null ? null : JSON.parse(row.last_round_json),
+    bets,
+    lastBets,
+    lastRound: lastRound && lastRound.result <= 12 ? lastRound : null,
     chatId: row.chat_id,
     messageId: row.message_id,
-    adminAction: row.admin_action
+    adminAction: row.admin_action,
+    spinning: Number(row.spin_lock) === 1
   };
+}
+
+async function claimSpinLock(db, userId) {
+  const result = await db.prepare(
+    "UPDATE sessions SET spin_lock = 1 WHERE user_id = ? AND spin_lock = 0 RETURNING user_id"
+  ).bind(String(userId)).first();
+  return Boolean(result);
+}
+
+async function releaseSpinLock(db, userId) {
+  await db.prepare("UPDATE sessions SET spin_lock = 0 WHERE user_id = ?").bind(String(userId)).run();
 }
 
 async function saveSession(db, userId, state) {
@@ -164,19 +184,15 @@ function describeBet(bet) {
 }
 
 function formatGame(state, balance, playerName) {
-  const numberLines = [];
-  for (let first = 0; first <= 36; first += 13) {
-    const last = Math.min(first + 12, 36);
-    const entries = [];
-    for (let number = first; number <= last; number += 1) {
-      const color = colorFor(number) === "red" ? "🔴" : colorFor(number) === "black" ? "⚫" : "💚";
-      entries.push(`${number}${color}`);
-    }
-    numberLines.push(entries.join("  "));
-  }
+  const numberLines = [[0, 1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]].map((numbers) =>
+    numbers.map((number) => {
+      const color = colorFor(number);
+      return `${number}${color === "red" ? "🔴" : color === "black" ? "⚫" : "💚"}`;
+    }).join("  ")
+  );
   const lines = [
     "🎰 Минирулетка",
-    "Европейская рулетка · числа 0–36",
+    "Числа от 0 до 12",
     ...numberLines,
     "",
     "Ставки можно написать текстом:",
@@ -193,15 +209,15 @@ function formatGame(state, balance, playerName) {
       "",
       `Последний результат: ${result} ${colorName(color)}.`,
       payout > 0
-        ? `Выплата: ${payout.toLocaleString("ru-RU")} монет (ставки: ${totalStake.toLocaleString("ru-RU")}).`
-        : `Ставка ${totalStake.toLocaleString("ru-RU")} монет не сыграла.`,
+        ? `✅ Успешно! Выплата: ${payout.toLocaleString("ru-RU")} монет (ставки: ${totalStake.toLocaleString("ru-RU")}).`
+        : `❌ Не сыграла ставка ${totalStake.toLocaleString("ru-RU")} монет.`,
       `Баланс ${playerName}: ${updatedBalance.toLocaleString("ru-RU")} монет.`
     );
   } else {
     lines.push("", `Баланс ${playerName}: ${balance.toLocaleString("ru-RU")} монет.`);
   }
 
-  lines.push("", "Выплаты: точное число ×36, красное/чёрное ×2. Ноль зелёный; цвет на ноль не выигрывает.");
+  lines.push("", "Выплаты: числа 1–12 ×2, ноль ×36, красное/чёрное ×2.");
   return lines.join("\n");
 }
 
@@ -379,6 +395,10 @@ async function handleMessage(message, env) {
   const admins = adminIds(env);
   const state = await loadSession(env.DB, userId);
 
+  if (state.spinning) {
+    await sendMessage(env, chatId, "🎰 Идёт прокрутка. Подожди результат.");
+    return;
+  }
   if (await processAdminMessage(env, state, text, command, userId, chatId, admins)) return;
   if (command === "/start") {
     const balance = await getBalance(env.DB, userId);
@@ -400,9 +420,9 @@ async function handleMessage(message, env) {
     await sendMessage(
       env,
       chatId,
-      "Добавляй ставки кнопками или текстом: 1000 на красное или 5000 на 12. Также доступны чёрное и числа 0–36.\n" +
+      "Добавляй ставки кнопками или текстом: 1000 на красное или 5000 на 12. Также доступны чёрное и числа 0–12.\n" +
       "Нажми «Крутить», чтобы запустить раунд. «Повторить» ставит прошлый набор, «Удвоить» удваивает текущий.\n" +
-      "Выплаты: красное/чёрное ×2, точное число ×36 (включая 0). Выплата включает ставку.\n" +
+      "Выплаты: красное/чёрное и числа 1–12 ×2, точное число 0 ×36. Выплата включает ставку.\n" +
       "Монеты виртуальные: их нельзя купить или вывести."
     );
     return;
@@ -438,6 +458,10 @@ async function handleCallback(query, env) {
   const admins = adminIds(env);
   const playerName = displayName(query.from);
 
+  if (state.spinning) {
+    await answerCallback(env, query, "Крутка уже идёт. Подожди результат.");
+    return;
+  }
   if (query.data.startsWith("admin:")) {
     if (!isAdmin(userId, admins)) {
       await answerCallback(env, query, "Нет доступа к панели администратора.");
@@ -461,6 +485,7 @@ async function handleCallback(query, env) {
   }
 
   let errorMessage = "";
+  let shouldSpin = false;
   try {
     const parts = query.data.split(":");
     if (parts[0] === "bet" && parts[1] === "color" && parts.length === 3) {
@@ -486,10 +511,7 @@ async function handleCallback(query, env) {
       state.bets = [];
     } else if (query.data === "spin") {
       if (!state.bets.length) throw new TypeError("Сначала добавь ставку.");
-      const round = await playBets(env.DB, userId, state.bets);
-      state.lastBets = state.bets.map((bet) => ({ ...bet }));
-      state.bets = [];
-      state.lastRound = round;
+      shouldSpin = true;
     } else {
       throw new TypeError("Эта кнопка больше неактуальна. Открой игру заново.");
     }
@@ -498,7 +520,30 @@ async function handleCallback(query, env) {
   }
 
   await answerCallback(env, query, errorMessage);
-  if (!errorMessage) await refreshGame(env, state, chatId, userId, playerName);
+  if (errorMessage) return;
+  if (!shouldSpin) {
+    await refreshGame(env, state, chatId, userId, playerName);
+    return;
+  }
+
+  if (!await claimSpinLock(env.DB, userId)) {
+    await sendMessage(env, chatId, "🎰 Крутка уже идёт. Подожди результат.");
+    return;
+  }
+  try {
+    const spinState = await loadSession(env.DB, userId);
+    if (!spinState.bets.length) throw new TypeError("Сначала добавь ставку.");
+    await telegram(env, "sendDice", { chat_id: chatId, emoji: "🎰" });
+    await delay(2_200);
+    const round = await playBets(env.DB, userId, spinState.bets);
+    spinState.lastBets = spinState.bets.map((bet) => ({ ...bet }));
+    spinState.bets = [];
+    spinState.lastRound = round;
+    await saveSession(env.DB, userId, spinState);
+    await refreshGame(env, spinState, chatId, userId, playerName);
+  } finally {
+    await releaseSpinLock(env.DB, userId);
+  }
 }
 
 async function processUpdate(update, env) {

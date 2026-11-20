@@ -1,10 +1,10 @@
 export const STARTING_BALANCE = 10_000;
-export const NUMBER_COUNT = 37;
-const redNumbers = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+export const NUMBER_COUNT = 13;
+const redNumbers = new Set([1, 3, 5, 7, 9, 12]);
 
 export function colorFor(number) {
   if (!Number.isInteger(number) || number < 0 || number >= NUMBER_COUNT) {
-    throw new RangeError("Number must be from 0 to 36.");
+    throw new RangeError("Number must be from 0 to 12.");
   }
   if (number === 0) return "green";
   return redNumbers.has(number) ? "red" : "black";
@@ -16,8 +16,8 @@ export function validateBet(bet) {
   }
 
   if (bet.type === "number") {
-    if (!Number.isInteger(bet.value) || bet.value < 0 || bet.value > 36) {
-      throw new TypeError("Выбери число от 0 до 36.");
+    if (!Number.isInteger(bet.value) || bet.value < 0 || bet.value > 12) {
+      throw new TypeError("Выбери число от 0 до 12.");
     }
     return { amount: bet.amount, type: bet.type, value: bet.value };
   }
@@ -35,7 +35,7 @@ export function settleBet(inputBet, result) {
   const won = bet.type === "number" ? bet.value === result
       : bet.value === resultColor;
 
-  const multiplier = bet.type === "color" ? 2 : 36;
+  const multiplier = bet.type === "number" && bet.value === 0 ? 36 : 2;
   const payout = won ? bet.amount * multiplier : 0;
   if (!Number.isSafeInteger(payout)) {
     throw new RangeError("Размер выигрыша слишком большой.");
