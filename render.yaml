@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: arabian-roulette-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    disk:
+      name: arabian-roulette-wallets
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: DATA_DIR
+        value: /var/data
