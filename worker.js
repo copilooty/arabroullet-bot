@@ -402,7 +402,13 @@ async function handleMessage(message, env) {
     return;
   }
 
-  const directBet = parseTextBet(text);
+  let directBet;
+  try {
+    directBet = parseTextBet(text);
+  } catch (error) {
+    await sendMessage(env, chatId, error.message);
+    return;
+  }
   if (!directBet && command !== "/bet") return;
   try {
     const bet = directBet || parseTextBet(text);

@@ -3,3 +3,4 @@ data/
 .env
 /bot-config.js
 /.wrangler-config/
+/.secrets.local.json

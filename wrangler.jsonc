@@ -2,12 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "arabian-roulette-bot",
   "main": "worker.js",
-  "compatibility_date": "2026-11-21",
+  "compatibility_date": "2026-11-20",
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "arabian-roulette-bot",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "b3204b45-a70d-4f90-834d-cbe20cec72de",
       "migrations_dir": "migrations"
     }
   ]
