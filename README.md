@@ -5,9 +5,9 @@ Chat-only Telegram roulette bot with virtual coins. The Cloudflare version uses 
 ## Rules
 
 - Every new Telegram user receives 10,000 virtual coins.
-- The server draws one result uniformly from 0–12.
-- Numbers 1–12 alternate red and black; 0 is green.
-- Exact number 1–12 pays 12×, exact 0 pays 13×, a three-number range pays 4×, and red/black pays 2×.
+- The server draws one result uniformly from the 37 pockets on a European single-zero wheel (0–36).
+- Pocket colors follow the European roulette layout; 0 is green.
+- A winning straight-up number bet returns 36× the stake, including the stake. Red/black returns 2×. A color bet loses on 0.
 - A winning payout includes the stake. Losing stakes are deducted.
 - No deposits, purchases, cash-outs, or real-money payments are implemented.
 
@@ -23,20 +23,20 @@ Requires Node.js and an account at Cloudflare. In a terminal opened in this proj
    npx wrangler login
    ```
 
-2. Create the D1 database and copy the returned database ID:
+2. The live repository is already configured with its D1 database ID. For a separate Cloudflare account, create a database and copy the returned ID:
 
    ```sh
    npx wrangler d1 create arabian-roulette-bot
    ```
 
-3. Open `wrangler.jsonc` and replace `REPLACE_WITH_D1_DATABASE_ID` with that ID.
-4. Create the tables in the remote D1 database:
+3. If you created a separate database, replace `database_id` in `wrangler.jsonc` with its ID.
+4. Apply the database migrations (the existing production database already has them):
 
    ```sh
    npx wrangler d1 migrations apply arabian-roulette-bot --remote
    ```
 
-5. Add secrets. Wrangler prompts for each value; do not put secrets in this repository:
+5. Add secrets only when setting up a new Cloudflare Worker. Wrangler prompts for each value; do not put secrets in this repository:
 
    ```sh
    npx wrangler secret put BOT_TOKEN

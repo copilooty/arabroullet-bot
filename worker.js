@@ -1,4 +1,4 @@
-import { settleBets, validateBet } from "./game-rules.js";
+import { colorFor, settleBets, validateBet } from "./game-rules.js";
 import { parseTextBet } from "./telegram-bot.js";
 
 const STARTING_BALANCE = 10_000;
@@ -19,12 +19,12 @@ function isValidWebhookSecret(request, expectedSecret) {
 }
 
 function randomNumber() {
-  const limit = 0x1_0000_0000 - (0x1_0000_0000 % 13);
+  const limit = 0x1_0000_0000 - (0x1_0000_0000 % 37);
   const buffer = new Uint32Array(1);
   do {
     crypto.getRandomValues(buffer);
   } while (buffer[0] >= limit);
-  return buffer[0] % 13;
+  return buffer[0] % 37;
 }
 
 function adminIds(env) {
@@ -35,14 +35,19 @@ function defaultSession() {
   return { bets: [], lastBets: [], lastRound: null, chatId: null, messageId: null, adminAction: null };
 }
 
+function displayName(user) {
+  const name = user.username ? `@${user.username}` : user.first_name || "Игрок";
+  return String(name).replace(/[\r\n\u0000-\u001f]/g, " ").slice(0, 64);
+}
+
 async function loadSession(db, userId) {
   const row = await db.prepare(
     "SELECT bets_json, last_bets_json, last_round_json, chat_id, message_id, admin_action FROM sessions WHERE user_id = ?"
   ).bind(String(userId)).first();
   if (!row) return defaultSession();
   return {
-    bets: JSON.parse(row.bets_json),
-    lastBets: JSON.parse(row.last_bets_json),
+    bets: JSON.parse(row.bets_json).filter((bet) => bet.type !== "range"),
+    lastBets: JSON.parse(row.last_bets_json).filter((bet) => bet.type !== "range"),
     lastRound: row.last_round_json === null ? null : JSON.parse(row.last_round_json),
     chatId: row.chat_id,
     messageId: row.message_id,
@@ -152,20 +157,30 @@ function colorName(color) {
 }
 
 function describeBet(bet) {
-  if (bet.type === "number") return `число ${bet.value}`;
-  if (bet.type === "range") return `${bet.from}–${bet.to}`;
+  if (bet.type === "number") {
+    return bet.value === 0 ? "зелёное / 0" : `число ${bet.value}`;
+  }
   return colorName(bet.value);
 }
 
-function formatGame(state, balance) {
+function formatGame(state, balance, playerName) {
+  const numberLines = [];
+  for (let first = 0; first <= 36; first += 13) {
+    const last = Math.min(first + 12, 36);
+    const entries = [];
+    for (let number = first; number <= last; number += 1) {
+      const color = colorFor(number) === "red" ? "🔴" : colorFor(number) === "black" ? "⚫" : "💚";
+      entries.push(`${number}${color}`);
+    }
+    numberLines.push(entries.join("  "));
+  }
   const lines = [
     "🎰 Минирулетка",
-    "Угадайте число из:",
-    "0💚  1🔴  2⚫  3🔴  4⚫  5🔴  6⚫",
-    "7🔴  8⚫  9🔴  10⚫  11🔴  12⚫",
+    "Европейская рулетка · числа 0–36",
+    ...numberLines,
     "",
     "Ставки можно написать текстом:",
-    "1000 на красное  |  5000 на 12  |  1000 на 1–3",
+    "1000 на красное  |  5000 на 12",
     "",
     state.bets.length
       ? `Текущая ставка:\n${state.bets.map((bet) => `• ${bet.amount.toLocaleString("ru-RU")} на ${describeBet(bet)}`).join("\n")}\nВсего: ${state.bets.reduce((sum, bet) => sum + bet.amount, 0).toLocaleString("ru-RU")}`
@@ -180,25 +195,19 @@ function formatGame(state, balance) {
       payout > 0
         ? `Выплата: ${payout.toLocaleString("ru-RU")} монет (ставки: ${totalStake.toLocaleString("ru-RU")}).`
         : `Ставка ${totalStake.toLocaleString("ru-RU")} монет не сыграла.`,
-      `Баланс: ${updatedBalance.toLocaleString("ru-RU")} монет.`
+      `Баланс ${playerName}: ${updatedBalance.toLocaleString("ru-RU")} монет.`
     );
   } else {
-    lines.push("", `Баланс: ${balance.toLocaleString("ru-RU")} монет.`);
+    lines.push("", `Баланс ${playerName}: ${balance.toLocaleString("ru-RU")} монет.`);
   }
 
-  lines.push("", "Выплаты: число ×12, диапазон ×4, цвет ×2, ноль ×13. Ставка включена в выплату.");
+  lines.push("", "Выплаты: точное число ×36, красное/чёрное ×2. Ноль зелёный; цвет на ноль не выигрывает.");
   return lines.join("\n");
 }
 
 function gameKeyboard() {
   return {
     inline_keyboard: [
-      [
-        { text: "1 – 3", callback_data: "bet:range:1:3" },
-        { text: "4 – 6", callback_data: "bet:range:4:6" },
-        { text: "7 – 9", callback_data: "bet:range:7:9" },
-        { text: "10 – 12", callback_data: "bet:range:10:12" }
-      ],
       [
         { text: "1к на 🔴", callback_data: "bet:color:red" },
         { text: "1к на ⚫", callback_data: "bet:color:black" },
@@ -230,27 +239,27 @@ function menuKeyboard(userId, admins) {
   return { keyboard, resize_keyboard: true };
 }
 
-async function sendGame(env, state, chatId, userId) {
+async function sendGame(env, state, chatId, userId, playerName) {
   const balance = await getBalance(env.DB, userId);
-  const message = await sendMessage(env, chatId, formatGame(state, balance), gameKeyboard());
+  const message = await sendMessage(env, chatId, formatGame(state, balance, playerName), gameKeyboard());
   state.chatId = chatId;
   state.messageId = message.message_id;
   await saveSession(env.DB, userId, state);
 }
 
-async function refreshGame(env, state, chatId, userId) {
+async function refreshGame(env, state, chatId, userId, playerName) {
   const balance = await getBalance(env.DB, userId);
   if (String(state.chatId) === String(chatId) && state.messageId) {
     await telegram(env, "editMessageText", {
       chat_id: chatId,
       message_id: state.messageId,
-      text: formatGame(state, balance),
+      text: formatGame(state, balance, playerName),
       reply_markup: gameKeyboard()
     });
     await saveSession(env.DB, userId, state);
     return;
   }
-  await sendGame(env, state, chatId, userId);
+  await sendGame(env, state, chatId, userId, playerName);
 }
 
 async function addBet(env, state, userId, inputBet) {
@@ -366,6 +375,7 @@ async function handleMessage(message, env) {
   if (!userId || !chatId || typeof message.text !== "string") return;
   const text = message.text.trim();
   const command = text.split(/\s+/, 1)[0].split("@", 1)[0].toLowerCase();
+  const playerName = displayName(message.from);
   const admins = adminIds(env);
   const state = await loadSession(env.DB, userId);
 
@@ -375,7 +385,7 @@ async function handleMessage(message, env) {
     await sendMessage(
       env,
       chatId,
-      `Добро пожаловать в Рулетку!\n\nМонеты: ${balance.toLocaleString("ru-RU")}\n` +
+      `Добро пожаловать, ${playerName}!\n\nБаланс ${playerName}: ${balance.toLocaleString("ru-RU")} виртуальных монет.\n` +
       "Напиши «Рулетка», чтобы открыть игру. Всем новым игрокам начисляется 10 000 виртуальных монет.",
       menuKeyboard(userId, admins)
     );
@@ -383,22 +393,22 @@ async function handleMessage(message, env) {
   }
   if (command === "/balance" || text.toLowerCase() === "💰 баланс") {
     const balance = await getBalance(env.DB, userId);
-    await sendMessage(env, chatId, `Баланс: ${balance.toLocaleString("ru-RU")} виртуальных монет.`);
+    await sendMessage(env, chatId, `Баланс ${playerName}: ${balance.toLocaleString("ru-RU")} виртуальных монет.`);
     return;
   }
   if (command === "/help" || text.toLowerCase() === "📖 помощь") {
     await sendMessage(
       env,
       chatId,
-      "Добавляй ставки кнопками или текстом: 1000 на красное, 1000 на чёрное, 5000 на 12, 1000 на 1–3.\n" +
+      "Добавляй ставки кнопками или текстом: 1000 на красное или 5000 на 12. Также доступны чёрное и числа 0–36.\n" +
       "Нажми «Крутить», чтобы запустить раунд. «Повторить» ставит прошлый набор, «Удвоить» удваивает текущий.\n" +
-      "Выплаты: цвет ×2, диапазон ×4, число 1–12 ×12, число 0 ×13. Выплата включает ставку.\n" +
+      "Выплаты: красное/чёрное ×2, точное число ×36 (включая 0). Выплата включает ставку.\n" +
       "Монеты виртуальные: их нельзя купить или вывести."
     );
     return;
   }
   if (command === "/roulette" || text.toLowerCase() === "рулетка" || text.toLowerCase() === "🎰 рулетка") {
-    await sendGame(env, state, chatId, userId);
+    await sendGame(env, state, chatId, userId, playerName);
     return;
   }
 
@@ -414,7 +424,7 @@ async function handleMessage(message, env) {
     const bet = directBet || parseTextBet(text);
     if (!bet) throw new TypeError("Формат: 1000 на красное, 5000 на 12 или /bet 1000 7.");
     await addBet(env, state, userId, bet);
-    await refreshGame(env, state, chatId, userId);
+    await refreshGame(env, state, chatId, userId, playerName);
   } catch (error) {
     await sendMessage(env, chatId, error.message);
   }
@@ -426,6 +436,7 @@ async function handleCallback(query, env) {
   if (!userId || !chatId || typeof query.data !== "string") return;
   const state = await loadSession(env.DB, userId);
   const admins = adminIds(env);
+  const playerName = displayName(query.from);
 
   if (query.data.startsWith("admin:")) {
     if (!isAdmin(userId, admins)) {
@@ -452,9 +463,7 @@ async function handleCallback(query, env) {
   let errorMessage = "";
   try {
     const parts = query.data.split(":");
-    if (parts[0] === "bet" && parts[1] === "range" && parts.length === 4) {
-      await addBet(env, state, userId, { type: "range", from: Number(parts[2]), to: Number(parts[3]), amount: 1_000 });
-    } else if (parts[0] === "bet" && parts[1] === "color" && parts.length === 3) {
+    if (parts[0] === "bet" && parts[1] === "color" && parts.length === 3) {
       await addBet(env, state, userId, { type: "color", value: parts[2], amount: 1_000 });
     } else if (parts[0] === "bet" && parts[1] === "number" && parts.length === 3) {
       await addBet(env, state, userId, { type: "number", value: Number(parts[2]), amount: 1_000 });
@@ -489,7 +498,7 @@ async function handleCallback(query, env) {
   }
 
   await answerCallback(env, query, errorMessage);
-  if (!errorMessage) await refreshGame(env, state, chatId, userId);
+  if (!errorMessage) await refreshGame(env, state, chatId, userId, playerName);
 }
 
 async function processUpdate(update, env) {

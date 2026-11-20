@@ -1,12 +1,13 @@
 export const STARTING_BALANCE = 10_000;
-export const NUMBER_COUNT = 13;
+export const NUMBER_COUNT = 37;
+const redNumbers = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
 
 export function colorFor(number) {
   if (!Number.isInteger(number) || number < 0 || number >= NUMBER_COUNT) {
-    throw new RangeError("Number must be from 0 to 12.");
+    throw new RangeError("Number must be from 0 to 36.");
   }
   if (number === 0) return "green";
-  return number % 2 === 1 ? "red" : "black";
+  return redNumbers.has(number) ? "red" : "black";
 }
 
 export function validateBet(bet) {
@@ -14,17 +15,9 @@ export function validateBet(bet) {
     throw new TypeError("Ставка должна быть целым числом больше нуля.");
   }
 
-  if (bet.type === "range") {
-    const groups = [[1, 3], [4, 6], [7, 9], [10, 12]];
-    if (!groups.some(([from, to]) => bet.from === from && bet.to === to)) {
-      throw new TypeError("Выбери один из диапазонов: 1–3, 4–6, 7–9 или 10–12.");
-    }
-    return { amount: bet.amount, type: bet.type, from: bet.from, to: bet.to };
-  }
-
   if (bet.type === "number") {
-    if (!Number.isInteger(bet.value) || bet.value < 0 || bet.value > 12) {
-      throw new TypeError("Выбери число от 0 до 12.");
+    if (!Number.isInteger(bet.value) || bet.value < 0 || bet.value > 36) {
+      throw new TypeError("Выбери число от 0 до 36.");
     }
     return { amount: bet.amount, type: bet.type, value: bet.value };
   }
@@ -40,13 +33,9 @@ export function settleBet(inputBet, result) {
   const bet = validateBet(inputBet);
   const resultColor = colorFor(result);
   const won = bet.type === "number" ? bet.value === result
-    : bet.type === "range" ? result >= bet.from && result <= bet.to
       : bet.value === resultColor;
 
-  const multiplier = bet.type === "color"
-    ? 2
-    : bet.type === "range" ? 4
-    : bet.value === 0 ? 13 : 12;
+  const multiplier = bet.type === "color" ? 2 : 36;
   const payout = won ? bet.amount * multiplier : 0;
   if (!Number.isSafeInteger(payout)) {
     throw new RangeError("Размер выигрыша слишком большой.");

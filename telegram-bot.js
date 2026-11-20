@@ -1,4 +1,4 @@
-import { validateBet } from "./game-rules.js";
+import { colorFor, validateBet } from "./game-rules.js";
 
 const QUICK_STAKE = 1_000;
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -16,14 +16,10 @@ export function parseTextBet(text) {
   if (/^черн[а-я]*$/u.test(selection) || selection === "black") {
     return validateBet({ type: "color", value: "black", amount });
   }
-  if (/^(?:[0-9]|1[0-2])$/u.test(selection)) {
+  if (/^(?:[0-9]|[1-2][0-9]|3[0-6])$/u.test(selection)) {
     return validateBet({ type: "number", value: Number(selection), amount });
   }
-  const range = selection.match(/^([1-9]|1[0-2])\s*[-–]\s*([1-9]|1[0-2])$/u);
-  if (range) {
-    return validateBet({ type: "range", from: Number(range[1]), to: Number(range[2]), amount });
-  }
-  throw new TypeError("Ставь на красное, чёрное, число 0–12 или диапазон 1–3 / 4–6 / 7–9 / 10–12.");
+  throw new TypeError("Ставь на красное, чёрное или число от 0 до 36.");
 }
 
 export function startTelegramBot({ token, adminIds = [], wallets }) {
@@ -63,20 +59,30 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
   }
 
   function describeBet(bet) {
-    if (bet.type === "number") return `число ${bet.value}`;
-    if (bet.type === "range") return `${bet.from}–${bet.to}`;
+    if (bet.type === "number") {
+      return bet.value === 0 ? "зелёное / 0" : `число ${bet.value}`;
+    }
     return colorName(bet.value);
   }
 
-  function formatGame(state, balance) {
+  function formatGame(state, balance, playerName) {
+    const numberLines = [];
+    for (let first = 0; first <= 36; first += 13) {
+      const last = Math.min(first + 12, 36);
+      const entries = [];
+      for (let number = first; number <= last; number += 1) {
+        const color = colorFor(number) === "red" ? "🔴" : colorFor(number) === "black" ? "⚫" : "💚";
+        entries.push(`${number}${color}`);
+      }
+      numberLines.push(entries.join("  "));
+    }
     const lines = [
       "🎰 Минирулетка",
-      "Угадайте число из:",
-      "0💚  1🔴  2⚫  3🔴  4⚫  5🔴  6⚫",
-      "7🔴  8⚫  9🔴  10⚫  11🔴  12⚫",
+      "Европейская рулетка · числа 0–36",
+      ...numberLines,
       "",
       "Ставки можно написать текстом:",
-      "1000 на красное  |  5000 на 12  |  1000 на 1–3",
+      "1000 на красное  |  5000 на 12",
       "",
       state.bets.length
         ? `Текущая ставка:\n${state.bets.map((bet) => `• ${bet.amount.toLocaleString("ru-RU")} на ${describeBet(bet)}`).join("\n")}\nВсего: ${state.bets.reduce((sum, bet) => sum + bet.amount, 0).toLocaleString("ru-RU")}`
@@ -92,24 +98,18 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
         won
           ? `Выплата: ${payout.toLocaleString("ru-RU")} монет (ставки: ${totalStake.toLocaleString("ru-RU")}).`
           : `Ставка ${totalStake.toLocaleString("ru-RU")} монет не сыграла.`,
-        `Баланс: ${updatedBalance.toLocaleString("ru-RU")} монет.`
+        `Баланс ${playerName}: ${updatedBalance.toLocaleString("ru-RU")} монет.`
       );
     } else {
-      lines.push("", `Баланс: ${balance.toLocaleString("ru-RU")} монет.`);
+      lines.push("", `Баланс ${playerName}: ${balance.toLocaleString("ru-RU")} монет.`);
     }
 
-    lines.push("", "Выплаты: число ×12, диапазон ×4, цвет ×2, ноль ×13. Ставка включена в выплату.");
+    lines.push("", "Выплаты: точное число ×36, красное/чёрное ×2. Ноль зелёный; цвет на ноль не выигрывает.");
     return lines.join("\n");
   }
 
   function gameKeyboard() {
     const rows = [
-      [
-        { text: "1 – 3", callback_data: "bet:range:1:3" },
-        { text: "4 – 6", callback_data: "bet:range:4:6" },
-        { text: "7 – 9", callback_data: "bet:range:7:9" },
-        { text: "10 – 12", callback_data: "bet:range:10:12" }
-      ],
       [
         { text: "1к на 🔴", callback_data: "bet:color:red" },
         { text: "1к на ⚫", callback_data: "bet:color:black" },
@@ -141,22 +141,22 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     return { keyboard, resize_keyboard: true };
   }
 
-  async function sendGame(chatId, userId) {
+  async function sendGame(chatId, userId, playerName) {
     const state = getState(userId);
     const balance = wallets.getBalance(userId);
     const message = await callTelegram("sendMessage", {
       chat_id: chatId,
-      text: formatGame(state, balance),
+      text: formatGame(state, balance, playerName),
       reply_markup: gameKeyboard()
     });
     state.chatId = chatId;
     state.messageId = message.message_id;
   }
 
-  async function refreshGame(chatId, userId) {
+  async function refreshGame(chatId, userId, playerName) {
     const state = getState(userId);
     const balance = wallets.getBalance(userId);
-    const text = formatGame(state, balance);
+    const text = formatGame(state, balance, playerName);
     if (state.chatId === chatId && state.messageId) {
       await callTelegram("editMessageText", {
         chat_id: chatId,
@@ -166,7 +166,7 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
       });
       return;
     }
-    await sendGame(chatId, userId);
+    await sendGame(chatId, userId, playerName);
   }
 
   function addBet(userId, inputBet) {
@@ -285,6 +285,11 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     return false;
   }
 
+  function displayName(user) {
+    const name = user.username ? `@${user.username}` : user.first_name || "Игрок";
+    return String(name).replace(/[\r\n\u0000-\u001f]/g, " ").slice(0, 64);
+  }
+
   async function handleMessage(message) {
     const userId = message.from?.id;
     const chatId = message.chat?.id;
@@ -292,13 +297,14 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
 
     const text = message.text.trim();
     const command = text.split(/\s+/, 1)[0].split("@", 1)[0].toLowerCase();
+    const playerName = displayName(message.from);
     if (await processAdminMessage(message, text, command, userId, chatId)) return;
 
     if (command === "/start") {
       const balance = wallets.getBalance(userId);
       await sendMessage(
         chatId,
-        `Добро пожаловать в Рулетку!\n\nМонеты: ${balance.toLocaleString("ru-RU")}\n` +
+        `Добро пожаловать, ${playerName}!\n\nБаланс ${playerName}: ${balance.toLocaleString("ru-RU")} виртуальных монет.\n` +
         "Напиши «Рулетка», чтобы открыть игру. Всем новым игрокам начисляется 10 000 виртуальных монет.",
         menuKeyboard(userId)
       );
@@ -306,23 +312,23 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     }
 
     if (command === "/balance" || text.toLowerCase() === "💰 баланс") {
-      await sendMessage(chatId, `Баланс: ${wallets.getBalance(userId).toLocaleString("ru-RU")} виртуальных монет.`);
+      await sendMessage(chatId, `Баланс ${playerName}: ${wallets.getBalance(userId).toLocaleString("ru-RU")} виртуальных монет.`);
       return;
     }
 
     if (command === "/help" || text.toLowerCase() === "📖 помощь") {
       await sendMessage(
         chatId,
-        "Добавляй ставки кнопками или текстом: 1000 на красное, 1000 на чёрное, 5000 на 12, 1000 на 1–3.\n" +
+        "Добавляй ставки кнопками или текстом: 1000 на красное или 5000 на 12. Также доступны чёрное и числа 0–36.\n" +
         "Нажми «Крутить», чтобы запустить раунд. «Повторить» ставит прошлый набор, «Удвоить» удваивает текущий.\n" +
-        "Выплаты: цвет ×2, диапазон ×4, число 1–12 ×12, число 0 ×13. Выплата включает ставку.\n" +
+        "Выплаты: красное/чёрное ×2, точное число ×36 (включая 0). Выплата включает ставку.\n" +
         "Монеты виртуальные: их нельзя купить или вывести."
       );
       return;
     }
 
     if (command === "/roulette" || text.toLowerCase() === "рулетка" || text.toLowerCase() === "🎰 рулетка") {
-      await sendGame(chatId, userId);
+      await sendGame(chatId, userId, playerName);
       return;
     }
 
@@ -333,7 +339,7 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
         const bet = directBet || parseTextBet(text);
         if (!bet) throw new TypeError("Формат: 1000 на красное, 5000 на 12 или /bet 1000 7.");
         addBet(userId, bet);
-        await refreshGame(chatId, userId);
+        await refreshGame(chatId, userId, playerName);
       } catch (error) {
         await sendMessage(chatId, error.message);
       }
@@ -378,9 +384,7 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     const parts = query.data.split(":");
     let responseText = "";
     try {
-      if (parts[0] === "bet" && parts[1] === "range" && parts.length === 4) {
-        addBet(userId, { type: "range", from: Number(parts[2]), to: Number(parts[3]), amount: QUICK_STAKE });
-      } else if (parts[0] === "bet" && parts[1] === "color" && parts.length === 3) {
+      if (parts[0] === "bet" && parts[1] === "color" && parts.length === 3) {
         addBet(userId, { type: "color", value: parts[2], amount: QUICK_STAKE });
       } else if (parts[0] === "bet" && parts[1] === "number" && parts.length === 3) {
         addBet(userId, { type: "number", value: Number(parts[2]), amount: QUICK_STAKE });
@@ -415,7 +419,7 @@ export function startTelegramBot({ token, adminIds = [], wallets }) {
     }
 
     await answerCallback(query, responseText);
-    if (!responseText) await refreshGame(chatId, userId);
+    if (!responseText) await refreshGame(chatId, userId, displayName(query.from));
   }
 
   async function handleUpdate(update) {

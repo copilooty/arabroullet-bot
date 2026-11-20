@@ -29,7 +29,7 @@ test("updated balances persist when the store is reopened", () => {
 test("multiple chat bets use one result and debit the combined stake once", () => {
   const wallets = createWalletStore(join(temporaryDirectory, "combined-wallets.json"));
   const round = wallets.playBets("789", [
-    { type: "range", from: 1, to: 3, amount: 50 },
+    { type: "number", value: 12, amount: 50 },
     { type: "color", value: "red", amount: 25 }
   ]);
   assert.equal(round.totalStake, 75);
