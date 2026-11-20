@@ -1,6 +1,6 @@
 # Arabian Roulette Telegram Bot
 
-Chat-only Telegram roulette bot. It uses virtual coins that cannot be purchased or withdrawn.
+Chat-only Telegram roulette bot with virtual coins. The Cloudflare version uses Telegram webhooks and D1, so it does not need a continuously running server or persistent disk.
 
 ## Rules
 
@@ -11,41 +11,65 @@ Chat-only Telegram roulette bot. It uses virtual coins that cannot be purchased 
 - A winning payout includes the stake. Losing stakes are deducted.
 - No deposits, purchases, cash-outs, or real-money payments are implemented.
 
-## Run on Windows
+## Deploy to Cloudflare Workers + D1
 
-Requires Node.js 18 or newer.
+The Cloudflare Workers Free plan currently includes up to 100,000 Worker requests per day. D1 has separate daily read/write and storage limits. The bot uses one incoming Worker request per Telegram update.
+
+Requires Node.js and an account at Cloudflare. In a terminal opened in this project folder:
+
+1. Log in to Cloudflare:
+
+   ```sh
+   npx wrangler login
+   ```
+
+2. Create the D1 database and copy the returned database ID:
+
+   ```sh
+   npx wrangler d1 create arabian-roulette-bot
+   ```
+
+3. Open `wrangler.jsonc` and replace `REPLACE_WITH_D1_DATABASE_ID` with that ID.
+4. Create the tables in the remote D1 database:
+
+   ```sh
+   npx wrangler d1 migrations apply arabian-roulette-bot --remote
+   ```
+
+5. Add secrets. Wrangler prompts for each value; do not put secrets in this repository:
+
+   ```sh
+   npx wrangler secret put BOT_TOKEN
+   npx wrangler secret put ADMIN_IDS
+   npx wrangler secret put WEBHOOK_SECRET
+   ```
+
+   `BOT_TOKEN` comes from **@BotFather**. `ADMIN_IDS` is the admin's numeric Telegram ID. `WEBHOOK_SECRET` should be a private random string using only letters, numbers, `_`, or `-`.
+
+6. Deploy the Worker:
+
+   ```sh
+   npx wrangler deploy
+   ```
+
+7. Register the Telegram webhook. Run the PowerShell helper and enter the Worker URL, bot token, and the same webhook secret when prompted:
+
+   ```powershell
+   .\deploy\register-webhook.ps1
+   ```
+
+The helper hides the token and secret while you type them. After deployment, `/start` opens the chat game; admins can use `/admin`.
+
+## Local long-polling run
+
+For local testing, add the token and admin ID to the ignored `bot-config.js` file, then run:
 
 ```powershell
-cd "C:\it\arabian roullet"
 npm.cmd start
 ```
 
-Before starting, open `bot-config.js` in the project folder and paste the token from **@BotFather** between the quotes. Add your numeric Telegram account ID to `ADMIN_IDS` in the same file:
+Run tests with `npm.cmd test`.
 
-```js
-export const BOT_TOKEN = "PASTE_TOKEN_HERE";
-export const ADMIN_IDS = ["YOUR_TELEGRAM_ID"];
-```
+## Security and storage
 
-Replace both placeholders with your values and save the file. Only IDs in `ADMIN_IDS` can open `/admin`. The panel can grant coins to you or a player, and check a player's balance. There is no configured grant cap; balances must stay within JavaScript's safe integer range. Keep the token secret. The file is excluded from Git so it is not accidentally committed. Keep the terminal open while the bot is running. Then send `/start` to your bot in Telegram and tap **🎰 Рулетка**.
-
-## Play
-
-Use the inline buttons to add 1,000-coin bets on ranges, colors, or zero. Then choose **Крутить**, **Повторить**, or **Удвоить**. Text bets are supported too: `1000 на красное`, `5000 на 12`, `1к на чёрное`, or `/bet 1000 7`. Use `/balance` for your wallet and `/help` for instructions. Admins can use `/admin` or `/give ID SUM` (`/give SUM` grants to themselves).
-
-Run tests with:
-
-```powershell
-npm.cmd test
-```
-
-Wallets are stored in `data/wallets.json`. The JSON store is intended for a single-instance prototype. Keep your bot token secret.
-
-## Deploy to Render
-
-The project includes `render.yaml` for a single background worker and a persistent disk for wallet data. Push this folder to a GitHub repository, then in Render choose **New → Blueprint** and connect that repository. When prompted, set:
-
-- `BOT_TOKEN` to the token from @BotFather.
-- `ADMIN_IDS` to your numeric Telegram user ID.
-
-Render's background worker and persistent disk require a paid service plan. The disk keeps player balances across restarts and deploys. Do not upload `bot-config.js`; it is excluded from Git.
+`bot-config.js` and local `data/` are excluded from Git. Cloudflare secrets are stored as Worker secrets; balances, game state, and processed Telegram update IDs are stored in D1. Do not commit bot tokens or share them in chat.
