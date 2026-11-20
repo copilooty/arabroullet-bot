@@ -217,7 +217,6 @@ function formatGame(state, balance, playerName) {
     lines.push("", `Баланс ${playerName}: ${balance.toLocaleString("ru-RU")} монет.`);
   }
 
-  lines.push("", "Выплаты: числа 1–12 ×2, ноль ×36, красное/чёрное ×2.");
   return lines.join("\n");
 }
 
